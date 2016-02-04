@@ -1,0 +1,209 @@
+****Assignment 1 Applied Microeconometrics***
+
+**Question number 1**
+
+**Set up the problem**
+set obs 1234
+
+***Data generating process***
+generate Dc_star = rnormal(0,1)
+generate Dc = 1 if Dc_star>0
+replace Dc=0 if Dc!=1
+generate eta_c = rnormal(0,1) 
+generate clusterid = _n
+
+expandcl 100, generate (new_clusterid) cluster (clusterid)
+generate error_ic = rnormal(0,1) 
+
+generate y_ic = Dc + eta_c + Dc*eta_c + error_ic
+
+**Part a**
+regress y_ic Dc 
+outreg2 using ps1_q1.doc, replace ctitle (Naive Regression)
+
+**Part b**
+regress y_ic Dc, robust
+outreg2 using ps1_q1.doc, append ctitle (Robust SE)
+
+**Part c**
+regress y_ic Dc, cluster(clusterid)
+outreg2 using ps1_q1.doc, append ctitle (Clustered SE)
+
+**Part e**
+collapse (mean) y_ic Dc, by(clusterid)
+reg y_ic Dc
+outreg2 using ps1_q1.doc, append ctitle (Collapsed)
+
+**Part f, with the collapsed data**
+reg y_ic Dc, robust
+outreg2 using ps1_q1.doc, append ctitle (Collapsed Robust)
+reg y_ic Dc, vce(hc2)
+outreg2 using ps1_q1.doc, append ctitle (Collapsed hc2)
+reg y_ic Dc, vce(hc3)
+outreg2 using ps1_q1.doc, append ctitle (Collapsed hc3)
+
+
+**Question 1 simulation**
+set seed 1234
+capture program drop PS1_Q1_Montecarlo
+program define PS1_Q1_Montecarlo, rclass
+
+  drop _all
+  qui set obs 100
+  generate Dc_star = rnormal(0,1)
+  generate Dc = Dc_star if Dc_star>0
+  generate eta_c = rnormal(0,1) 
+  generate clusterid = _n
+  expandcl 100, generate (new_clusterid) cluster (clusterid)
+  generate error_ic = rnormal(0,1) 
+  generate y_ic = Dc + eta_c + Dc*eta_c + error_ic
+  regress y_ic Dc  
+  test Dc = 1
+  return scalar reject1 = r(p) <.05
+  regress y_ic Dc, cluster(clusterid)
+  test Dc = 1
+  return scalar reject2 = r(p) <.05
+ 
+  collapse (mean) y_ic Dc, by(clusterid)
+  reg y_ic Dc
+  test Dc = 1
+  return scalar reject3 = r(p) <.05
+  
+  reg y_ic Dc, robust
+  test Dc = 1
+  return scalar reject4 = r(p) <.05
+  
+  reg y_ic Dc, vce(hc2)
+  test Dc = 1
+  return scalar reject5 = r(p) <.05
+end
+
+simulate reject1  = r(reject1) reject2= r(reject2) reject3=r(reject3) reject4=r(reject4) reject5=r(reject5), reps (1000): PS1_Q1_Montecarlo
+sum reject1 reject2 reject3 reject4 reject5 
+
+
+***Question number 2**
+
+
+***Part (a)****
+
+sum 
+reg vote00 treat_real
+reg vote98 treat_real
+reg newreg treat_real
+reg age treat_real
+reg female treat_real
+reg vote02 treat_real
+logit treat_real vote00 vote98 newreg age female persons
+
+****Part (b)****
+reg vote02 treat_real vote00 vote98 newreg age female persons,r
+
+reg contact treat_real vote00 vote98 newreg age female persons,r
+predict resid,resid
+
+ivreg2 vote02 age	female persons	vote00	vote98	newreg (contact = treat_real),first r
+reg vote02 contact vote00 vote98 newreg age female persons resid,r
+
+
+******Part (c): simple OLS****
+
+eststo, title("No controls"):quietly reg vote02 i.contact 
+eststo, title("With controls"):quietly reg vote02 i.contact c.persons i.vote00 i.vote98 i.newreg c.age i.female
+eststo, title("Interaction"):quietly reg vote02  i.contact##(c.persons vote00 vote98 newreg c.age female) if !(contact==0 & treat_real==1)
+ 
+estout, cells(b(fmt(a3) star) se(fmt(3) par))  ///
+    stats(r2 N, labels(R-squared "Observations"))            ///
+	label legend varlabels(_cons Constant) nobaselevels 
+
+estpost ttest persons vote00 vote98 newreg age female vote02, by(contact)
+esttab, cells("mu_1(fmt(2)) mu_2(fmt(3)) p(fmt(3)) ") nonumber noobs label 
+
+******Part (d: i and ii): Porpensity score 
+
+psmatch2 contact persons vote00 vote98 newreg age female
+gen mypscore=_pscore
+estpost sum mypscore
+esttab using d1.csv, cells("mean(fmt(2))") nomtitle nonumber noobs label replace
+
+graph twoway (kdensity mypscore, lc(blue)) (kdensity mypscore, bw(0.05)) (kdensity mypscore, kernel(triangle)), legend(order(1 " Epanechnikov"  2 "Epanechnikov (bandwith 0.05)"  3 "Triangle") size(small) rows(1)) xtitle("propensity score") ytitle("")  
+graph export d1.png, replace
+
+twoway (kdensity mypscore if contact==1) (kdensity mypscore if contact==0, lpattern(dash)), legend( label( 1 "contacted") label(  2 "not contacted") ) xtitle("propensity score") ytitle("")  ///
+ title("Kernel density of propensity score with Epanechnikov kernel and optimal bandwidth ", size(small))
+graph export d2.png, replace
+
+*******Part(d : iii)****
+
+egen part1 = mean(vote02) if contact==1
+gen part2_a= vote02*(mypscore/(1 - mypscore)) if contact==0 & mypscore!=.
+gen part2_b= (mypscore/(1 - mypscore)) if contact==0 & mypscore!=.
+gen part2=sum(part2_a)/sum(part2_b) if contact==0 & mypscore!=.
+egen betahat1=mean(part1)
+egen betahat2=mean(part2)
+gen betahat=betahat1-betahat2
+
+*****Part(d : iv)*********
+gen weight=contact+((1-contact)*(mypscore/(1-mypscore)))
+reg vote02 contact [w=weight], r
+reg vote02 contact persons vote00 vote98 newreg age female [w=weight], r
+
+*******Part(d: v)****
+
+*Logit regression
+psmatch2 contact age female vote00 vote98 persons newreg, out(vote02) logit ate
+*Probit regression
+psmatch2 contact age female vote00 vote98 persons newreg, out(vote02) ate
+*Estimating by just using the propensity score method
+psmatch2 contact, out(vote02) pscore(mypscore) ate
+
+*******Part (d: vi)
+
+*pscore: pscore estimates the propensity score (pscore) of the treatment on varlist (the control variables)
+*using a probit (or logit) model and stratifies individuals in blocks according to the pscore
+
+pscore contact age female vote00 vote98 persons newreg, pscore(p2) blockid(strat) logit
+
+* attnd: nearest neighbor matching
+/*
+To save on computing time, nearest neighbors are not determined by comparing treated observations to
+every single control, but by first sorting all records by the estimated propensity score and then
+searching forward and backward for the closest control unit(s); if for a treated unit forward and
+backward matches happen to be equally good, this program randomly draws
+*/
+
+attnd vote02 contact age female vote00 vote98 persons newreg, pscore(p2) matchvar(neighbor) matchdta(match) 
+
+*atts: stratification
+/*
+The ATT is computed using a weighted (by the number of treated) average of the block-specific
+treatment effects. In turn these are computed as the difference in average outcomes of treated and
+controls within the same block 
+Users have to provide the name of a variable specifying the estimated propensity score and the name of a
+variable specifying a block identifier of the estimated propensity score, both of which can be
+produced with pscore.
+*/
+atts vote02 contact, pscore(p2) blockid(strat) 
+
+*attr: radius
+/*
+The ATT is computed by averaging over the unit-level treatment effects of the treated where the
+control(s) matched to a treated observation is/are those observations in the control group that lie
+within the user-defined radius (the default radius is 0.1)
+*/
+attr vote02 contact age female vote00 vote98 persons newreg, pscore(p2) 
+
+* attk: kernel 
+/*
+The ATT is computed averaging over the unit-level treatment effects of the treated where the control
+unit outcome matched to a treated observation is obtained as kernel-weighted average of control unit
+outcomes.
+*/
+quietly attk vote02 contact age female vote00 vote98 persons newreg, pscore(p2) boot reps(100)
+
+/*estimated treatment effect in the r(attk), the mean outcome of matched
+treated in r(mean1) and the mean outcome of matched controls in r(mean0).
+The number of treated and the number of controls are stored respectively in the scalars r(ntk) and
+r(nck).
+*/
+return list 
